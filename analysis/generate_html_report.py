@@ -203,7 +203,12 @@ def generate_report(results):
                             let val = parseFloat(cell.dataset.value);
                             // It will colorize based on the checked-rows scale. 
                             // If a value is outside the checked min/max, it clamps to min/max colors.
-                            cell.style.backgroundColor = getColor(val, mins[m], maxs[m], false);
+                            let bg = getColor(val, mins[m], maxs[m], false);
+                            cell.style.backgroundColor = bg;
+                            // Use white text on dark backgrounds for readability
+                            let [cr, cg, cb] = [parseInt(bg.slice(1,3),16), parseInt(bg.slice(3,5),16), parseInt(bg.slice(5,7),16)];
+                            let luminance = (0.299*cr + 0.587*cg + 0.114*cb);
+                            cell.style.color = luminance < 140 ? '#ffffff' : '#000000';
                         }
                     });
                 });
