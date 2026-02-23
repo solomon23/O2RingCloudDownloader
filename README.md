@@ -92,6 +92,30 @@ If you have a 10-hour sleep that the O2Ring split into three 3-hour files, this 
 
 ---
 
+## 🔄 Download vs. Regenerate Reports
+
+### Download new data from the cloud
+```bash
+uv run o2_downloader.py
+```
+This fetches new `.bin`/`.dat` files from Viatom's cloud, converts them to CSV, and runs analysis (if enabled in config). Already-downloaded files are skipped automatically.
+
+### Regenerate HTML reports without re-downloading
+
+**Quick rebuild** (uses cached spike detection results — fast):
+```bash
+cd analysis && python generate_html_report.py
+```
+
+**Full re-analysis** (re-runs spike detection from CSVs):
+```bash
+cd analysis && python generate_html_report.py --analyze
+```
+
+Use the quick rebuild when you want to refresh the HTML after tweaking report templates. Use `--analyze` when you've changed detection parameters or want to reprocess from scratch.
+
+---
+
 ## ❓ Troubleshooting
 
 **"Login failed"**
