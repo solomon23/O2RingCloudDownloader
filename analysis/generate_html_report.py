@@ -17,41 +17,92 @@ except Exception as e:
     traceback.print_exc()
     sys.exit(1)
 
-def generate_report():
-    print("Collecting data...", flush=True)
+def analyze_all():
+    """Run spike detection on all CSVs and save detector_results.csv. Slow."""
+    import csv as csv_mod
+    print("Analyzing all CSV files...", flush=True)
     results = []
-    
+
     search_path = os.path.join(CSV_DIR, "*.csv")
     csv_files = glob.glob(search_path)
     csv_files.sort(reverse=True)
     print(f"Found {len(csv_files)} files.", flush=True)
-    
+
     for fpath in csv_files:
         fname = os.path.basename(fpath)
+        if fname == 'detector_results.csv':
+            continue
         label = KNOWN_LABELS.get(fname, fname)
         if label == fname:
-            # Parse 20260217032620_326am_10h_23m.csv
             m = re.match(r'^(\d{4})(\d{2})(\d{2})\d{6}_(.*)\.csv', fname)
             if m:
                 label = f"{m.group(1)}-{m.group(2)}-{m.group(3)} {m.group(4)}"
                 label = label.replace('_', ' ')
 
         if not os.path.exists(fpath): continue
-        
+
         try:
             chart_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data', 'charts'))
             _, res = analyze_night(fpath, label, generate_chart=True, chart_dir=chart_dir)
             if res:
                 res['filename'] = fname
                 results.append(res)
-                print(f"Parsed {fname} -> Score: {res.get('score', 0)} | SI/hr: {res.get('si', 0)} | TAB: {res.get('tab', 0)} | Events: {res.get('events', 0)} | Hrs: {res.get('hours', 0)}", flush=True)
+                print(f"  {fname} -> Score: {res.get('score', 0)}", flush=True)
             else:
-                print(f"No results for {fname}", flush=True)
+                print(f"  No results for {fname}", flush=True)
         except Exception as e:
-            print(f"ERROR analyzing {fname}: {e}", flush=True)
-            
+            print(f"  ERROR analyzing {fname}: {e}", flush=True)
+
     if not results:
         print("No results found.", flush=True)
+        return []
+
+    # Save CSV
+    data_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data'))
+    csv_file = os.path.join(data_dir, 'detector_results.csv')
+    keys = []
+    for r in results:
+        for k in r.keys():
+            if k not in keys:
+                keys.append(k)
+    with open(csv_file, 'w', newline='', encoding='utf-8') as f:
+        writer = csv_mod.DictWriter(f, fieldnames=keys)
+        writer.writeheader()
+        writer.writerows(results)
+    print(f"CSV saved: {csv_file} ({len(results)} sessions)", flush=True)
+    return results
+
+def load_results_from_csv():
+    """Fast: load pre-computed results from detector_results.csv."""
+    import csv as csv_mod
+    data_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data'))
+    csv_file = os.path.join(data_dir, 'detector_results.csv')
+    if not os.path.exists(csv_file):
+        return None
+
+    results = []
+    with open(csv_file, 'r', encoding='utf-8') as f:
+        reader = csv_mod.DictReader(f)
+        for row in reader:
+            # Convert numeric fields back from strings
+            for k in row:
+                if k in ('file', 'label', 'filename'):
+                    continue
+                try:
+                    if '.' in row[k]:
+                        row[k] = float(row[k])
+                    else:
+                        row[k] = int(row[k])
+                except (ValueError, TypeError):
+                    pass
+            results.append(row)
+    print(f"Loaded {len(results)} sessions from {csv_file}", flush=True)
+    return results
+
+def generate_report(results):
+    """Generate HTML report from pre-computed results. Fast."""
+    if not results:
+        print("No results to generate report from.", flush=True)
         return
 
     html = []
@@ -60,7 +111,7 @@ def generate_report():
         <meta charset="utf-8">
         <title>HR Spike Detector Results</title>
         <style>
-            body { font-family: sans-serif; margin: 10px; }
+            body { font-family: sans-serif; margin: 10px; background-color: #fff; color: #000; }
             table { border-collapse: collapse; width: 100%; font-size: 13px; }
             th, td { border: 1px solid #ddd; padding: 4px 6px; text-align: center; }
             th { background-color: #f2f2f2; position: sticky; top: 0; cursor: pointer; }
@@ -74,6 +125,9 @@ def generate_report():
             .editable-label:focus { outline: 1px solid #00f; background-color: #fff; }
         </style>
         <script src="https://www.kryogenix.org/code/browser/sorttable/sorttable.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+        <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation"></script>
         <script>
             function openChart(url) {
                 document.getElementById('chartIframe').src = url;
@@ -251,24 +305,24 @@ def generate_report():
                 rows.forEach(row => {
                     let hrs = parseFloat(row.cells[3].dataset.sort) || 0;
                     totalHrs += hrs;
-                    
+
                     let evts = parseFloat(row.cells[12].innerText) || 0;
                     totalEvents += evts;
-                    
+
                     let pcArr = row.cells[13].innerText.split('/');
                     totalEvents10 += parseInt(pcArr[0] || 0);
                     totalEvents15 += parseInt(pcArr[1] || 0);
-                    
+
                     totalMajorA += parseInt(row.cells[17].innerText) || 0;
                     totalMajorB += parseInt(row.cells[18].innerText) || 0;
                     totalMajorC += parseInt(row.cells[19].innerText) || 0;
-                    
+
                     sumTab += (parseFloat(row.querySelector('.cell-tab').dataset.value) || 0) * hrs;
                     sumScore += (parseFloat(row.querySelector('.cell-score').dataset.value) || 0) * hrs;
-                    
+
                     sumDelta += (parseFloat(row.querySelector('.cell-delta').dataset.value) || 0) * evts;
                     sumP90 += (parseFloat(row.querySelector('.cell-p90').dataset.value) || 0) * evts;
-                    
+
                     let typeArr = row.cells[11].innerText.split('/');
                     sumTypeA += (parseFloat(typeArr[0]) || 0) * evts;
                     sumTypeB += (parseFloat(typeArr[1]) || 0) * evts;
@@ -316,7 +370,7 @@ def generate_report():
                 tr.innerHTML = `
                     <td><input type="checkbox" class="row-checkbox" checked></td>
                     <td class="left-align" style="white-space: nowrap;">${mergedDate}</td>
-                    <td class="left-align"><span class="editable-label" contenteditable="true">Merged: ${labels.join(' + ')}</span></td>
+                    <td class="left-align" style="font-size:11px;"><span class="editable-label" contenteditable="true">Merged: ${labels.join(' + ')}</span></td>
                     <td data-sort="${totalHrs}">${hrStr}</td>
                     <td class="cell-score" data-value="${newScore.toFixed(1)}">${newScore.toFixed(1)}</td>
                     <td class="cell-tab" data-value="${newTab.toFixed(1)}">${newTab.toFixed(1)}</td>
@@ -347,7 +401,7 @@ def generate_report():
                     tbody.insertBefore(tr, tbody.firstChild);
                 }
 
-                tr.querySelector('.row-checkbox').addEventListener('change', () => { updateColors(); saveData(); });
+                tr.querySelector('.row-checkbox').addEventListener('change', () => { updateColors(); updateChart(); saveData(); });
                 tr.querySelector('.editable-label').addEventListener('input', () => { tr.querySelector('.editable-label').dataset.edited = "true"; saveData(); });
                 
                 tr.querySelector('.unmerge-btn').addEventListener('click', (e) => {
@@ -394,9 +448,150 @@ def generate_report():
                 }
             }
 
+            let scoreChart = null;
+            function updateChart() {
+                let rows = Array.from(document.querySelectorAll("tbody tr"));
+                let entries = [];
+                rows.forEach(row => {
+                    if (row.style.display === 'none') return;
+                    let cb = row.querySelector('.row-checkbox');
+                    if (!cb || !cb.checked) return;
+                    let ts = parseFloat(row.dataset.timestamp);
+                    let scoreCell = row.querySelector('.cell-score');
+                    if (!ts || !scoreCell) return;
+                    let score = parseFloat(scoreCell.dataset.value);
+                    if (isNaN(score)) return;
+                    let d = new Date(ts * 1000);
+                    let label = (d.getMonth()+1) + '/' + d.getDate() + '/' + String(d.getFullYear()).slice(2);
+                    entries.push({ date: d, label: label, score: score });
+                });
+                entries.sort((a, b) => a.date - b.date);
+
+                let labels = entries.map(e => e.label);
+                let scores = entries.map(e => e.score);
+
+                // Compute y-axis range from data
+                let minScore = Infinity, maxScore = -Infinity;
+                scores.forEach(s => {
+                    if (s < minScore) minScore = s;
+                    if (s > maxScore) maxScore = s;
+                });
+                // Include nearest severity thresholds in range
+                let severityLines = [15, 30, 50, 75];
+                let nearestBelow = 0;
+                let nearestAbove = 100;
+                severityLines.forEach(s => {
+                    if (s <= minScore) nearestBelow = Math.max(nearestBelow, s);
+                    if (s >= maxScore) nearestAbove = Math.min(nearestAbove, s);
+                });
+                let yMin = Math.max(0, nearestBelow - 3);
+                let yMax = Math.min(100, nearestAbove + 3);
+
+                // Compute running average (window of 5)
+                let window = Math.min(5, Math.floor(scores.length / 2)) || 1;
+                let trend = scores.map((_, i) => {
+                    let start = Math.max(0, i - Math.floor(window / 2));
+                    let end = Math.min(scores.length, start + window);
+                    if (end === scores.length) start = Math.max(0, end - window);
+                    let sum = 0;
+                    for (let j = start; j < end; j++) sum += scores[j];
+                    return +(sum / (end - start)).toFixed(1);
+                });
+
+                let ctx = document.getElementById('scoreChart').getContext('2d');
+                if (scoreChart) {
+                    scoreChart.data.labels = labels;
+                    scoreChart.data.datasets[0].data = scores;
+                    scoreChart.data.datasets[1].data = trend;
+                    scoreChart.options.scales.y.min = yMin;
+                    scoreChart.options.scales.y.max = yMax;
+                    scoreChart.update();
+                } else {
+                    scoreChart = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: labels,
+                            datasets: [{
+                                label: 'Score',
+                                data: scores,
+                                borderColor: '#e53e3e',
+                                backgroundColor: 'rgba(229, 62, 62, 0.1)',
+                                fill: true,
+                                tension: 0.3,
+                                pointRadius: 4,
+                                pointHoverRadius: 7
+                            },
+                            {
+                                label: 'Trend',
+                                data: trend,
+                                borderColor: '#3182ce',
+                                borderWidth: 2,
+                                borderDash: [6, 4],
+                                pointRadius: 0,
+                                fill: false,
+                                tension: 0
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            scales: {
+                                x: {
+                                    title: { display: true, text: 'Date' },
+                                    ticks: {
+                                        autoSkip: true,
+                                        maxTicksToShow: 25,
+                                        maxRotation: 45
+                                    }
+                                },
+                                y: {
+                                    title: { display: true, text: 'Score (0-100)' },
+                                    min: yMin,
+                                    max: yMax
+                                }
+                            },
+                            plugins: {
+                                tooltip: {
+                                    callbacks: {
+                                        label: function(ctx) {
+                                            return 'Score: ' + ctx.parsed.y.toFixed(1);
+                                        }
+                                    }
+                                },
+                                annotation: {
+                                    annotations: {
+                                        normal: {
+                                            type: 'line', yMin: 15, yMax: 15,
+                                            borderColor: 'rgba(34,197,94,0.5)', borderWidth: 1, borderDash: [4,4],
+                                            label: { display: true, content: 'Mild > 15', position: 'start', font: {size: 10}, color: 'rgba(34,197,94,0.8)', backgroundColor: 'rgba(255,255,255,0.8)' }
+                                        },
+                                        mild: {
+                                            type: 'line', yMin: 30, yMax: 30,
+                                            borderColor: 'rgba(234,179,8,0.5)', borderWidth: 1, borderDash: [4,4],
+                                            label: { display: true, content: 'Moderate > 30', position: 'start', font: {size: 10}, color: 'rgba(161,125,0,0.8)', backgroundColor: 'rgba(255,255,255,0.8)' }
+                                        },
+                                        moderate: {
+                                            type: 'line', yMin: 50, yMax: 50,
+                                            borderColor: 'rgba(249,115,22,0.5)', borderWidth: 1, borderDash: [4,4],
+                                            label: { display: true, content: 'Severe > 50', position: 'start', font: {size: 10}, color: 'rgba(194,80,10,0.8)', backgroundColor: 'rgba(255,255,255,0.8)' }
+                                        },
+                                        severe: {
+                                            type: 'line', yMin: 75, yMax: 75,
+                                            borderColor: 'rgba(239,68,68,0.5)', borderWidth: 1, borderDash: [4,4],
+                                            label: { display: true, content: 'Very Severe > 75', position: 'start', font: {size: 10}, color: 'rgba(185,50,50,0.8)', backgroundColor: 'rgba(255,255,255,0.8)' }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+
             document.addEventListener("DOMContentLoaded", () => {
                 loadData();
                 updateColors();
+                updateChart();
                 updateMergeButtonState();
                 
                 // Attach event listeners to rows for Ctrl+Click selection
@@ -419,6 +614,7 @@ def generate_report():
                 document.querySelectorAll('.row-checkbox').forEach(cb => {
                     cb.addEventListener('change', () => {
                         updateColors();
+                        updateChart();
                         saveData();
                     });
                 });
@@ -459,12 +655,15 @@ def generate_report():
                 <li><strong>Type A/B/C %:</strong> Characteristics of the spikes (A=Drop/Recovery, B=Sustained/No Recovery, C=Blunted).</li>
             </ul>
         </p>
+        <div style="height: 300px; margin-bottom: 20px;">
+            <canvas id="scoreChart"></canvas>
+        </div>
         <table class="sortable">
             <thead>
                 <tr>
                     <th class="sorttable_nosort">Inc</th>
                     <th class="left-align" style="white-space: nowrap;">Date / Time</th>
-                    <th class="left-align">Night Label</th>
+                    <th class="left-align">Notes</th>
                     <th>Length</th>
                     <th>Score (0-100)</th>
                     <th>TAB</th>
@@ -510,13 +709,15 @@ def generate_report():
         # Extract date string from filename using datetime
         fname = r['filename']
         date_str = ""
+        timestamp_epoch = 0
         m_date = re.match(r'^(\d{14})_', fname)
         if m_date:
             try:
                 dt = datetime.datetime.strptime(m_date.group(1), "%Y%m%d%H%M%S")
+                timestamp_epoch = dt.timestamp()
                 prev_dt = dt - datetime.timedelta(days=1)
                 time_str = dt.strftime("%I:%M%p").lstrip("0").lower()
-                date_str = f"{prev_dt.month}/{prev_dt.day}-{dt.month}/{dt.day} {time_str}"
+                date_str = f"{prev_dt.month}/{prev_dt.day}-{dt.month}/{dt.day}/{dt.strftime('%y')} {time_str}"
             except:
                 pass
 
@@ -530,11 +731,28 @@ def generate_report():
 
         type_str = f"{r.get('pct_a', 0):.0f}/{r.get('pct_b', 0):.0f}/{r.get('pct_c', 0):.0f}"
 
-        html.append(f"<tr data-filename='{fname}'>")
-        html.append(f'<td><input type="checkbox" class="row-checkbox" checked></td>')
+        # Uncheck daytime sessions by default (start hour before 8pm / after 6am)
+        is_daytime = False
+        m_hour = re.match(r'^\d{8}(\d{2})', fname)
+        if m_hour:
+            hour = int(m_hour.group(1))
+            if 6 <= hour < 20:
+                is_daytime = True
+        checked_attr = "" if is_daytime else "checked"
+
+        html.append(f"<tr data-filename='{fname}' data-timestamp='{timestamp_epoch}'>")
+        html.append(f'<td><input type="checkbox" class="row-checkbox" {checked_attr}></td>')
         chart_fname = fname.replace('.csv', '_chart.html')
         html.append(f'<td class="left-align" style="white-space: nowrap;"><a href="javascript:openChart(\'charts/{chart_fname}\');" style="text-decoration:none; color:#0366d6;">{date_str}</a></td>')
-        html.append(f'<td class="left-align"><span class="editable-label" contenteditable="true">{r["label"]}</span></td>')
+        # Split label into display label and notes
+        label_text = r["label"]
+        # Strip date prefix and time/duration suffix, whatever remains is notes
+        tmp = label_text
+        tmp = re.sub(r'^\d{4}-\d{2}-\d{2}\s*', '', tmp)
+        tmp = re.sub(r'^\d+/\d+-\d+/\d+\s*', '', tmp)
+        tmp = re.sub(r'\d+[ap]m\s+\d+h\s+\d+m\s*$', '', tmp)
+        notes_text = tmp.strip()
+        html.append(f'<td class="left-align" style="font-size:11px; max-width:250px;"><span class="editable-label" contenteditable="true">{notes_text}</span></td>')
         html.append(f'<td data-sort="{hrs_exact}">{hr_str}</td>')
         html.append(cell('score', r['score']))
         html.append(cell('tab', r['tab']))
@@ -563,32 +781,28 @@ def generate_report():
         with open(out_file, 'w', encoding='utf-8') as f:
             f.write("\n".join(html))
         print(f"HTML Report generated: {out_file}", flush=True)
-        
-        # Save CSV copy
-        import csv
-        csv_file = os.path.join(data_dir, 'detector_results.csv')
-        # All keys should be relatively homogenous, find all possible keys 
-        keys = []
-        for r in results:
-            for k in r.keys():
-                if k not in keys:
-                    keys.append(k)
-                    
-        with open(csv_file, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=keys)
-            writer.writeheader()
-            writer.writerows(results)
-        print(f"CSV Report generated: {csv_file}", flush=True)
-
-        # Auto open in web browser
-        webbrowser.open('file://' + os.path.abspath(out_file))
     except Exception as e:
         print(f"Failed to write HTML report: {e}", flush=True)
         traceback.print_exc()
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--analyze', action='store_true',
+                        help='Re-analyze all CSVs (slow). Without this, uses cached detector_results.csv.')
+    args = parser.parse_args()
+
     try:
-        generate_report()
+        if args.analyze:
+            results = analyze_all()
+        else:
+            results = load_results_from_csv()
+            if results is None:
+                print("No cached results found. Running full analysis...", flush=True)
+                results = analyze_all()
+
+        if results:
+            generate_report(results)
     except Exception as e:
         print(f"Script crashed: {e}", flush=True)
         traceback.print_exc()
